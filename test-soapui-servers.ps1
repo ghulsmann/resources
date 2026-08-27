@@ -1,4 +1,4 @@
-# test-soapui-servers.ps1
+# SoapUI Testing for .NET Web Services against multiple servers
 
 param(
     [string]$SoapUIProject = "C:\path\to\your\project.xml",
@@ -11,6 +11,19 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Write-Host "This script requires administrator privileges. Restarting..." -ForegroundColor Red
     Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     exit
+}
+
+# Check if Excel is installed
+function Test-ExcelInstalled {
+    try {
+        $excel = New-Object -ComObject Excel.Application -ErrorAction Stop
+        $excel.Quit()
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
 }
 
 # Server configurations
@@ -40,6 +53,7 @@ $hostsFile = "C:\Windows\System32\drivers\etc\hosts"
 
 # Initialize results storage
 $allResults = @()
+$detailedResults = @()
 
 function Add-HostEntry {
     param(
@@ -146,6 +160,21 @@ function Run-SoapUITest {
             Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         }
         
+        # Store detailed response times for Excel
+        if ($responseTimes.Count -gt 0) {
+            for ($i = 0; $i -lt $responseTimes.Count; $i++) {
+                $detailedResults += @{
+                    Timestamp = $result.Timestamp
+                    ServerName = $ServerName
+                    Hostname = $Hostname
+                    IP = $IP
+                    OSVersion = $OSVersion
+                    RequestNumber = $i + 1
+                    ResponseTime = $responseTimes[$i]
+                }
+            }
+        }
+        
         Write-Host "Status: $($result.Status)" -ForegroundColor $(if ($testPassed) { "Green" } else { "Red" })
         Write-Host "Total Execution Time: $($result.TotalTime)ms"
         Write-Host "Avg Response Time: $($result.AvgResponseTime)ms | Min: $($result.MinResponseTime)ms | Max: $($result.MaxResponseTime)ms"
@@ -170,6 +199,241 @@ function Run-SoapUITest {
     }
     
     return $result
+}
+
+function Create-ExcelReport {
+    param(
+        [array]$SummaryResults,
+        [array]$DetailedResults,
+        [string]$OutputPath
+    )
+    
+    if (-not (Test-ExcelInstalled)) {
+        Write-Host "Excel not found. Skipping Excel report generation." -ForegroundColor Yellow
+        return
+    }
+    
+    Write-Host "`nGenerating Excel report..." -ForegroundColor Cyan
+    
+    try {
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $workbook = $excel.Workbooks.Add()
+        
+        # Remove default sheets
+        while ($workbook.Sheets.Count -gt 1) {
+            $workbook.Sheets.Item(1).Delete()
+        }
+        
+        # ===== SUMMARY DATA SHEET =====
+        $summarySheet = $workbook.Sheets.Item(1)
+        $summarySheet.Name = "Summary"
+        
+        # Add headers
+        $summarySheet.Cells.Item(1, 1) = "Timestamp"
+        $summarySheet.Cells.Item(1, 2) = "Server Name"
+        $summarySheet.Cells.Item(1, 3) = "Hostname"
+        $summarySheet.Cells.Item(1, 4) = "IP"
+        $summarySheet.Cells.Item(1, 5) = "OS Version"
+        $summarySheet.Cells.Item(1, 6) = "Status"
+        $summarySheet.Cells.Item(1, 7) = "Total Time (ms)"
+        $summarySheet.Cells.Item(1, 8) = "Avg Response (ms)"
+        $summarySheet.Cells.Item(1, 9) = "Min Response (ms)"
+        $summarySheet.Cells.Item(1, 10) = "Max Response (ms)"
+        
+        # Format header row
+        $headerRange = $summarySheet.Range("A1:J1")
+        $headerRange.Font.Bold = $true
+        $headerRange.Interior.ColorIndex = 15
+        $headerRange.HorizontalAlignment = -4108  # xlCenter
+        
+        # Add data
+        $row = 2
+        foreach ($result in $SummaryResults) {
+            $summarySheet.Cells.Item($row, 1) = $result.Timestamp
+            $summarySheet.Cells.Item($row, 2) = $result.ServerName
+            $summarySheet.Cells.Item($row, 3) = $result.Hostname
+            $summarySheet.Cells.Item($row, 4) = $result.IP
+            $summarySheet.Cells.Item($row, 5) = $result.OSVersion
+            $summarySheet.Cells.Item($row, 6) = $result.Status
+            $summarySheet.Cells.Item($row, 7) = $result.TotalTime
+            $summarySheet.Cells.Item($row, 8) = $result.AvgResponseTime
+            $summarySheet.Cells.Item($row, 9) = $result.MinResponseTime
+            $summarySheet.Cells.Item($row, 10) = $result.MaxResponseTime
+            
+            # Color code status
+            if ($result.Status -eq "PASSED") {
+                $summarySheet.Cells.Item($row, 6).Interior.Color = 0x00B050  # Green
+            } else {
+                $summarySheet.Cells.Item($row, 6).Interior.Color = 0xFF0000  # Red
+            }
+            
+            $row++
+        }
+        
+        # Autofit columns
+        $summarySheet.UsedRange.Columns.AutoFit() | Out-Null
+        
+        # ===== DETAILED DATA SHEET =====
+        $detailSheet = $workbook.Sheets.Add()
+        $detailSheet.Name = "Detailed Results"
+        
+        # Add headers
+        $detailSheet.Cells.Item(1, 1) = "Timestamp"
+        $detailSheet.Cells.Item(1, 2) = "Server Name"
+        $detailSheet.Cells.Item(1, 3) = "Hostname"
+        $detailSheet.Cells.Item(1, 4) = "IP"
+        $detailSheet.Cells.Item(1, 5) = "OS Version"
+        $detailSheet.Cells.Item(1, 6) = "Request Number"
+        $detailSheet.Cells.Item(1, 7) = "Response Time (ms)"
+        
+        # Format header row
+        $detailHeaderRange = $detailSheet.Range("A1:G1")
+        $detailHeaderRange.Font.Bold = $true
+        $detailHeaderRange.Interior.ColorIndex = 15
+        $detailHeaderRange.HorizontalAlignment = -4108  # xlCenter
+        
+        # Add data
+        $row = 2
+        foreach ($detail in $DetailedResults) {
+            $detailSheet.Cells.Item($row, 1) = $detail.Timestamp
+            $detailSheet.Cells.Item($row, 2) = $detail.ServerName
+            $detailSheet.Cells.Item($row, 3) = $detail.Hostname
+            $detailSheet.Cells.Item($row, 4) = $detail.IP
+            $detailSheet.Cells.Item($row, 5) = $detail.OSVersion
+            $detailSheet.Cells.Item($row, 6) = $detail.RequestNumber
+            $detailSheet.Cells.Item($row, 7) = $detail.ResponseTime
+            $row++
+        }
+        
+        # Autofit columns
+        $detailSheet.UsedRange.Columns.AutoFit() | Out-Null
+        
+        # ===== PIVOT TABLE SHEET =====
+        $pivotSheet = $workbook.Sheets.Add()
+        $pivotSheet.Name = "Pivot Analysis"
+        
+        # Create pivot table data source (from Summary sheet)
+        $dataRange = $summarySheet.UsedRange
+        $pivotCache = $workbook.PivotCaches().Create([Microsoft.Office.Interop.Excel.XlPivotTableSourceType]::xlDatabase, $dataRange)
+        
+        # Create pivot table on new sheet
+        $pivotTable = $pivotCache.CreatePivotTable($pivotSheet.Range("A1"), "ResponseTimePivot")
+        
+        # Configure pivot table
+        # Row: OS Version
+        $pivotTable.PivotFields("OS Version").Orientation = [Microsoft.Office.Interop.Excel.XlPivotFieldOrientation]::xlRowField
+        
+        # Column: Status
+        $pivotTable.PivotFields("Status").Orientation = [Microsoft.Office.Interop.Excel.XlPivotFieldOrientation]::xlColumnField
+        
+        # Data: Avg Response Time
+        $avgField = $pivotTable.PivotFields("Avg Response (ms)")
+        $avgField.Orientation = [Microsoft.Office.Interop.Excel.XlPivotFieldOrientation]::xlDataField
+        $avgField.Function = [Microsoft.Office.Interop.Excel.XlConsolidationFunction]::xlAverage
+        $avgField.Name = "Avg Response Time (ms)"
+        
+        # Add another data field: Count
+        $countField = $pivotTable.PivotFields("Server Name")
+        $countField.Orientation = [Microsoft.Office.Interop.Excel.XlPivotFieldOrientation]::xlDataField
+        $countField.Function = [Microsoft.Office.Interop.Excel.XlConsolidationFunction]::xlCount
+        
+        # ===== COMPARISON SHEET =====
+        $comparisonSheet = $workbook.Sheets.Add()
+        $comparisonSheet.Name = "OS Comparison"
+        
+        # Calculate summary statistics
+        $ws2012Data = $SummaryResults | Where-Object { $_.OSVersion -eq "2012" }
+        $ws2022Data = $SummaryResults | Where-Object { $_.OSVersion -eq "2022" }
+        
+        $comparisonSheet.Cells.Item(1, 1) = "Metric"
+        $comparisonSheet.Cells.Item(1, 2) = "Windows Server 2012"
+        $comparisonSheet.Cells.Item(1, 3) = "Windows Server 2022"
+        $comparisonSheet.Cells.Item(1, 4) = "Difference"
+        $comparisonSheet.Cells.Item(1, 5) = "% Improvement"
+        
+        $headerRange = $comparisonSheet.Range("A1:E1")
+        $headerRange.Font.Bold = $true
+        $headerRange.Interior.ColorIndex = 15
+        
+        $row = 2
+        
+        # Average Response Time
+        $comparisonSheet.Cells.Item($row, 1) = "Avg Response Time (ms)"
+        $avg2012 = if ($ws2012Data.Count -gt 0) { [int]($ws2012Data.AvgResponseTime | Measure-Object -Average).Average } else { 0 }
+        $avg2022 = if ($ws2022Data.Count -gt 0) { [int]($ws2022Data.AvgResponseTime | Measure-Object -Average).Average } else { 0 }
+        $comparisonSheet.Cells.Item($row, 2) = $avg2012
+        $comparisonSheet.Cells.Item($row, 3) = $avg2022
+        $comparisonSheet.Cells.Item($row, 4) = $avg2012 - $avg2022
+        
+        if ($avg2012 -ne 0) {
+            $improvement = [math]::Round((($avg2012 - $avg2022) / $avg2012) * 100, 2)
+            $comparisonSheet.Cells.Item($row, 5) = "$improvement%"
+        }
+        
+        $row++
+        
+        # Max Response Time
+        $comparisonSheet.Cells.Item($row, 1) = "Max Response Time (ms)"
+        $max2012 = if ($ws2012Data.Count -gt 0) { ($ws2012Data.MaxResponseTime | Measure-Object -Maximum).Maximum } else { 0 }
+        $max2022 = if ($ws2022Data.Count -gt 0) { ($ws2022Data.MaxResponseTime | Measure-Object -Maximum).Maximum } else { 0 }
+        $comparisonSheet.Cells.Item($row, 2) = $max2012
+        $comparisonSheet.Cells.Item($row, 3) = $max2022
+        $comparisonSheet.Cells.Item($row, 4) = $max2012 - $max2022
+        
+        if ($max2012 -ne 0) {
+            $improvement = [math]::Round((($max2012 - $max2022) / $max2012) * 100, 2)
+            $comparisonSheet.Cells.Item($row, 5) = "$improvement%"
+        }
+        
+        $row++
+        
+        # Min Response Time
+        $comparisonSheet.Cells.Item($row, 1) = "Min Response Time (ms)"
+        $min2012 = if ($ws2012Data.Count -gt 0) { ($ws2012Data.MinResponseTime | Measure-Object -Minimum).Minimum } else { 0 }
+        $min2022 = if ($ws2022Data.Count -gt 0) { ($ws2022Data.MinResponseTime | Measure-Object -Minimum).Minimum } else { 0 }
+        $comparisonSheet.Cells.Item($row, 2) = $min2012
+        $comparisonSheet.Cells.Item($row, 3) = $min2022
+        $comparisonSheet.Cells.Item($row, 4) = $min2012 - $min2022
+        
+        if ($min2012 -ne 0) {
+            $improvement = [math]::Round((($min2012 - $min2022) / $min2012) * 100, 2)
+            $comparisonSheet.Cells.Item($row, 5) = "$improvement%"
+        }
+        
+        $row++
+        
+        # Test Success Rate
+        $comparisonSheet.Cells.Item($row, 1) = "Success Rate"
+        $passed2012 = @($ws2012Data | Where-Object { $_.Status -eq "PASSED" }).Count
+        $passed2022 = @($ws2022Data | Where-Object { $_.Status -eq "PASSED" }).Count
+        $rate2012 = if ($ws2012Data.Count -gt 0) { [math]::Round(($passed2012 / $ws2012Data.Count) * 100, 0) } else { 0 }
+        $rate2022 = if ($ws2022Data.Count -gt 0) { [math]::Round(($passed2022 / $ws2022Data.Count) * 100, 0) } else { 0 }
+        $comparisonSheet.Cells.Item($row, 2) = "$rate2012%"
+        $comparisonSheet.Cells.Item($row, 3) = "$rate2022%"
+        $comparisonSheet.Cells.Item($row, 4) = "$($rate2022 - $rate2012)%"
+        
+        $comparisonSheet.UsedRange.Columns.AutoFit() | Out-Null
+        
+        # Save workbook
+        $workbook.SaveAs($OutputPath)
+        $workbook.Close()
+        $excel.Quit()
+        
+        # Release COM objects
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($pivotTable) | Out-Null
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($pivotCache) | Out-Null
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook) | Out-Null
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
+        
+        Write-Host "Excel report saved to: $OutputPath" -ForegroundColor Green
+        
+        # Open the file
+        Invoke-Item $OutputPath
+    }
+    catch {
+        Write-Host "Error creating Excel report: $_" -ForegroundColor Red
+    }
 }
 
 # Main execution
@@ -225,10 +489,11 @@ $allResults | Group-Object -Property OSVersion | ForEach-Object {
 $csvPath = Join-Path $ResultsDir "test-results-$(Get-Date -Format 'yyyyMMdd-HHmmss').csv"
 $allResults | Select-Object Timestamp, ServerName, Hostname, IP, OSVersion, Status, TotalTime, AvgResponseTime, MinResponseTime, MaxResponseTime |
     Export-Csv -Path $csvPath -NoTypeInformation
-Write-Host "`nDetailed report saved to: $csvPath" -ForegroundColor Green
+Write-Host "`nCSV report saved to: $csvPath" -ForegroundColor Green
 
-# Optional: Create Excel pivot table summary (if Excel is installed)
-# ... you can add additional reporting here
+# Create Excel report with pivot tables
+$excelPath = Join-Path $ResultsDir "test-results-$(Get-Date -Format 'yyyyMMdd-HHmmss').xlsx"
+Create-ExcelReport -SummaryResults $allResults -DetailedResults $detailedResults -OutputPath $excelPath
 
 Write-Host "`nTest run completed at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
-Write-Host "Total execution time: $((Get-Date) - $startTime).TotalMinutes minutes" -ForegroundColor Cyan
+Write-Host "Total execution time: $([math]::Round((Get-Date - $startTime).TotalMinutes, 2)) minutes" -ForegroundColor Cyan
