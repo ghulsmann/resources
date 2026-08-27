@@ -1,4 +1,4 @@
-# test-soapui-servers.ps1
+# Automated testing for SoapUI for .NET Web Services
 
 param(
     [string]$ResultsDir = "C:\results",
