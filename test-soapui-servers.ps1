@@ -75,11 +75,19 @@ function Remove-HostEntry {
         [string]$Hostname
     )
     
-    $hosts = Get-Content $hostsFile
-    $updatedHosts = $hosts | Where-Object { $_ -notmatch "\s+$Hostname\s*$" }
-    Set-Content -Path $hostsFile -Value $updatedHosts
-    Write-Host "Removed host entry: $Hostname" -ForegroundColor Yellow
+    try {
+        $hosts = Get-Content $hostsFile
+        $updatedHosts = $hosts | Where-Object { $_ -notmatch "\s+$Hostname\s*$" }
+        Set-Content -Path $hostsFile -Value $updatedHosts
+        Write-Host "Removed host entry: $Hostname" -ForegroundColor Yellow
+        return $true
+    }
+    catch {
+        Write-Host "Warning: Could not remove host entry for $Hostname : $_" -ForegroundColor Yellow
+        return $false
+    }
 }
+
 
 function Run-SoapUITest {
     param(
